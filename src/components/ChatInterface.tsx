@@ -415,7 +415,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         // 1. Analyze Tone
         setInitStage('analyzing');
         const toneResponse = await withRetry(() => ai.models.generateContent({
-          model: 'gemini-1.5-flash-latest',
+          model: 'gemini-2.0-flash',
           contents: `Đoạn thơ: "${poem}"\nTác giả: ${author}\nHãy chỉ ra giọng điệu và cảm xúc chủ đạo của đoạn thơ này trong 1-3 từ (ví dụ: hào hùng, bi tráng, tha thiết, buồn bã, vui tươi...). Chỉ trả về các từ chỉ giọng điệu, không giải thích thêm.`
         }));
         
@@ -443,7 +443,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         // 3. Start Chat
         setInitStage('ready');
         const chat = ai.chats.create({
-          model: 'gemini-1.5-flash-latest',
+          model: 'gemini-2.0-flash',
           config: {
             systemInstruction: SYSTEM_PROMPT,
           },
