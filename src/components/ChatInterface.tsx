@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Chat, Modality, ThinkingLevel } from '@google/genai';
 import Markdown from 'react-markdown';
-import { Send, Volume2, Loader2, ArrowLeft, User, Sparkles, BookOpen, X, Mic, Square, Key, Activity, Lightbulb, Feather } from 'lucide-react';
+import { Send, Volume2, Loader2, ArrowLeft, User, Sparkles, BookOpen, X, Mic, Square, Key, Activity, Lightbulb, Feather, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const SYSTEM_PROMPT = `Định vị: Bạn là "Mentor Thẩm mĩ Thơ ca", một chuyên gia Văn học và là người dẫn dắt đầy tính sư phạm. Nhiệm vụ của bạn là hướng dẫn học sinh cấp 3 phát hiện và giải mã tín hiệu thẩm mĩ trong thơ hiện đại dựa trên phương pháp tri giác và tư duy ngôn ngữ nghệ thuật.
@@ -73,6 +73,7 @@ interface Message {
   role: 'user' | 'model';
   text: string;
   isAudioLoading?: boolean;
+  isError?: boolean;
 }
 
 interface AudioTask {
@@ -108,6 +109,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const [showMobilePoem, setShowMobilePoem] = useState(false);
   
   const [initStage, setInitStage] = useState<'idle' | 'analyzing' | 'reading' | 'ready' | 'error' | 'key_needed'>('idle');
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
   const [manualApiKey, setManualApiKey] = useState('');
   const [isManualKeyMode, setIsManualKeyMode] = useState(false);
   const [poemTone, setPoemTone] = useState('');
@@ -413,24 +415,41 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     initializedRef.current = true;
 
     const initializeMentoring = async () => {
+      console.log("Initializing mentoring session (v4)...");
       try {
         const ai = getGenAIClient();
-        if (!ai) {
+        if (!ai || isQuotaExceeded) {
+          console.log("No API Key found or quota exceeded, showing key input.");
           setInitStage('key_needed');
           return;
         }
         
+        console.log("API Key found, setting up chat session.");
         // Skip automatic analysis to save quota
         setPoemTone('truyền cảm');
-        setInitStage('ready');
-
-        const chat = ai.chats.create({
-          model: 'gemini-2.0-flash',
-          config: {
-            systemInstruction: SYSTEM_PROMPT,
-          },
-        });
+        
+        let chat;
+        try {
+          chat = ai.chats.create({
+            model: 'gemini-3-flash-preview',
+            config: {
+              systemInstruction: SYSTEM_PROMPT,
+            },
+          });
+          console.log("Chat session created successfully.");
+        } catch (chatError: any) {
+          console.error("Error creating chat session:", chatError);
+          const errorStr = chatError?.message || String(chatError);
+          if (chatError?.status === 429 || errorStr.includes('429') || errorStr.includes('quota')) {
+            setIsQuotaExceeded(true);
+            setInitStage('key_needed');
+            return;
+          }
+          throw chatError;
+        }
+        
         setChatSession(chat);
+        setInitStage('ready');
 
         // Don't send initial prompt automatically, wait for user or show a welcome message
         setMessages([{
@@ -441,13 +460,15 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         
       } catch (error: any) {
         console.error('Initialization error:', error);
-        let errorMessage = 'Xin lỗi, đã có lỗi xảy ra khi khởi tạo. Vui lòng thử lại sau.';
         const errorStr = error?.message || String(error);
         
         if (error?.status === 429 || errorStr.includes('429') || errorStr.includes('quota')) {
-          errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút hoặc thử dùng một API Key khác.';
+          setIsQuotaExceeded(true);
+          setInitStage('key_needed');
+          return;
         }
         
+        let errorMessage = 'Xin lỗi, đã có lỗi xảy ra khi khởi tạo. Vui lòng thử lại sau.';
         setMessages([{
           id: Date.now().toString(),
           role: 'model',
@@ -502,10 +523,15 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       
     } catch (error: any) {
       console.error('Failed to send message:', error);
-      let errorMessage = 'Xin lỗi, tôi không thể trả lời lúc này. Vui lòng thử lại.';
-      if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('quota')) {
-        errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút.';
+      const errorStr = error?.message || String(error);
+      
+      if (error?.status === 429 || errorStr.includes('429') || errorStr.includes('quota')) {
+        setIsQuotaExceeded(true);
+        setInitStage('key_needed');
+        return;
       }
+      
+      let errorMessage = 'Xin lỗi, tôi không thể trả lời lúc này. Vui lòng thử lại.';
       setMessages((prev) => [
         ...prev,
         {
@@ -551,9 +577,13 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
           <div className="w-16 h-16 bg-[#5A5A40] rounded-full flex items-center justify-center mx-auto mb-6">
             <Key className="text-white w-8 h-8" />
           </div>
-          <h2 className="text-2xl font-serif font-bold text-[#1a1a1a] mb-4">Cần API Key để tiếp tục</h2>
+          <h2 className="text-2xl font-serif font-bold text-[#1a1a1a] mb-4">
+            {isQuotaExceeded ? 'Hạn mức API đã hết' : 'Cần API Key để tiếp tục'}
+          </h2>
           <p className="text-[#5A5A40] mb-6">
-            Ứng dụng không tìm thấy API Key hoặc Key hiện tại bị lỗi. Vui lòng nhập API Key của bạn để tiếp tục.
+            {isQuotaExceeded 
+              ? 'Hệ thống đang quá tải hoặc API Key hiện tại đã hết hạn mức sử dụng miễn phí của Google. Vui lòng nhập API Key cá nhân của bạn để tiếp tục không giới hạn.'
+              : 'Ứng dụng không tìm thấy API Key hợp lệ. Vui lòng nhập API Key của bạn để bắt đầu trải nghiệm.'}
           </p>
           <div className="space-y-4">
             <input
@@ -566,6 +596,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
             <button
               onClick={() => {
                 if (manualApiKey.trim()) {
+                  setIsQuotaExceeded(false);
                   initializedRef.current = false;
                   setInitStage('idle');
                 }
@@ -838,13 +869,22 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
                       <div className="markdown-body text-[15px] leading-relaxed">
                         <Markdown>{msg.text}</Markdown>
                         {msg.isError && (
-                          <button 
-                            onClick={() => setInitStage('key_needed')}
-                            className="mt-4 flex items-center gap-2 px-4 py-2 bg-[#5A5A40] text-white rounded-xl hover:bg-[#4a4a35] transition-colors text-sm"
-                          >
-                            <Key size={14} />
-                            Thử dùng API Key khác
-                          </button>
+                          <div className="flex flex-wrap gap-2 mt-4">
+                            <button 
+                              onClick={() => setInitStage('key_needed')}
+                              className="flex items-center gap-2 px-4 py-2 bg-[#5A5A40] text-white rounded-xl hover:bg-[#4a4a35] transition-colors text-sm"
+                            >
+                              <Key size={14} />
+                              Thử dùng API Key khác
+                            </button>
+                            <button 
+                              onClick={() => window.location.reload()}
+                              className="flex items-center gap-2 px-4 py-2 bg-white border border-[#e0e0d8] text-[#5A5A40] rounded-xl hover:bg-[#f5f5f0] transition-colors text-sm"
+                            >
+                              <RefreshCw size={14} />
+                              Tải lại trang
+                            </button>
+                          </div>
                         )}
                       </div>
                     )}
