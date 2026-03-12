@@ -491,25 +491,23 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         const errorStr = error?.message || String(error);
         
         if (error?.status === 429 || errorStr.includes('429') || errorStr.includes('quota')) {
-          errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút.';
-        } else if (errorStr.includes('API_KEY_INVALID') || errorStr.includes('invalid')) {
-          errorMessage = 'API Key không hợp lệ. Vui lòng kiểm tra lại cấu hình trên Vercel.';
-        } else if (errorStr.includes('location') || errorStr.includes('supported')) {
-          errorMessage = 'Vùng lãnh thổ của bạn hiện chưa được Gemini hỗ trợ API này.';
+          errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút hoặc thử dùng một API Key khác.';
         }
         
         setMessages([{
           id: Date.now().toString(),
           role: 'model',
           text: `${errorMessage}\n\n*(Chi tiết lỗi: ${errorStr.substring(0, 100)}...)*`,
+          isError: true
         }]);
+        setInitStage('error');
       } finally {
         setIsLoading(false);
       }
     };
 
     initializeMentoring();
-  }, [poem, author]);
+  }, [poem, author, manualApiKey]); // Re-run if manual key changes
 
   const sendChatMessage = async (userMessage: string) => {
     if (!chatSession) return;
@@ -885,6 +883,15 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
                     {msg.role === 'model' && (
                       <div className="markdown-body text-[15px] leading-relaxed">
                         <Markdown>{msg.text}</Markdown>
+                        {msg.isError && (
+                          <button 
+                            onClick={() => setInitStage('key_needed')}
+                            className="mt-4 flex items-center gap-2 px-4 py-2 bg-[#5A5A40] text-white rounded-xl hover:bg-[#4a4a35] transition-colors text-sm"
+                          >
+                            <Key size={14} />
+                            Thử dùng API Key khác
+                          </button>
+                        )}
                       </div>
                     )}
                     {msg.role === 'user' && (
