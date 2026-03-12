@@ -107,7 +107,9 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [showMobilePoem, setShowMobilePoem] = useState(false);
   
-  const [initStage, setInitStage] = useState<'analyzing' | 'reading' | 'ready'>('analyzing');
+  const [initStage, setInitStage] = useState<'idle' | 'analyzing' | 'reading' | 'ready' | 'error' | 'key_needed'>('idle');
+  const [manualApiKey, setManualApiKey] = useState('');
+  const [isManualKeyMode, setIsManualKeyMode] = useState(false);
   const [poemTone, setPoemTone] = useState('');
   const [readingPoemLine, setReadingPoemLine] = useState<number | null>(null);
   const activePoemLineRef = useRef<HTMLDivElement>(null);
@@ -154,15 +156,17 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
 
   const getGenAIClient = () => {
     // Priority: 
-    // 1. process.env.API_KEY (AI Studio internal)
-    // 2. process.env.GEMINI_API_KEY (Defined in vite.config.ts from env)
-    // 3. import.meta.env.VITE_GEMINI_API_KEY (Standard Vite env var)
-    const apiKey = process.env.API_KEY || 
+    // 1. Manual Key from UI
+    // 2. process.env.API_KEY (AI Studio internal)
+    // 3. process.env.GEMINI_API_KEY (Defined in vite.config.ts from env)
+    // 4. import.meta.env.VITE_GEMINI_API_KEY (Standard Vite env var)
+    const apiKey = manualApiKey ||
+                   process.env.API_KEY || 
                    process.env.GEMINI_API_KEY || 
                    (import.meta as any).env?.VITE_GEMINI_API_KEY;
                    
     if (!apiKey || apiKey === 'undefined' || apiKey === 'MY_GEMINI_API_KEY') {
-      console.error("API Key is missing or invalid. Please check your environment variables.");
+      return null;
     }
     
     return new GoogleGenAI({ apiKey });
@@ -411,15 +415,24 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     const initializeMentoring = async () => {
       try {
         const ai = getGenAIClient();
+        if (!ai) {
+          setInitStage('key_needed');
+          return;
+        }
         
-        // 1. Analyze Tone
+        // 1. Analyze Tone (Optional - skip on failure)
         setInitStage('analyzing');
-        const toneResponse = await withRetry(() => ai.models.generateContent({
-          model: 'gemini-2.0-flash',
-          contents: `Đoạn thơ: "${poem}"\nTác giả: ${author}\nHãy chỉ ra giọng điệu và cảm xúc chủ đạo của đoạn thơ này trong 1-3 từ (ví dụ: hào hùng, bi tráng, tha thiết, buồn bã, vui tươi...). Chỉ trả về các từ chỉ giọng điệu, không giải thích thêm.`
-        }));
+        let tone = 'truyền cảm';
+        try {
+          const toneResponse = await withRetry(() => ai.models.generateContent({
+            model: 'gemini-2.0-flash',
+            contents: `Đoạn thơ: "${poem}"\nTác giả: ${author}\nHãy chỉ ra giọng điệu và cảm xúc chủ đạo của đoạn thơ này trong 1-3 từ (ví dụ: hào hùng, bi tráng, tha thiết, buồn bã, vui tươi...). Chỉ trả về các từ chỉ giọng điệu, không giải thích thêm.`
+          }));
+          tone = toneResponse.text?.trim() || 'truyền cảm';
+        } catch (e) {
+          console.warn('Tone analysis failed, skipping:', e);
+        }
         
-        const tone = toneResponse.text?.trim() || 'truyền cảm';
         setPoemTone(tone);
         
         // 2. Read Poem
@@ -578,6 +591,45 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     
     setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isAudioLoading: false } : m));
   };
+
+  if (initStage === 'key_needed') {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-[#f5f5f0] p-6 text-center">
+        <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-[#e0e0d8]">
+          <div className="w-16 h-16 bg-[#5A5A40] rounded-full flex items-center justify-center mx-auto mb-6">
+            <Key className="text-white w-8 h-8" />
+          </div>
+          <h2 className="text-2xl font-serif font-bold text-[#1a1a1a] mb-4">Cần API Key để tiếp tục</h2>
+          <p className="text-[#5A5A40] mb-6">
+            Ứng dụng không tìm thấy API Key hoặc Key hiện tại bị lỗi. Vui lòng nhập API Key của bạn để tiếp tục.
+          </p>
+          <div className="space-y-4">
+            <input
+              type="password"
+              placeholder="Dán API Key của bạn vào đây..."
+              value={manualApiKey}
+              onChange={(e) => setManualApiKey(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-[#e0e0d8] focus:outline-none focus:ring-2 focus:ring-[#5A5A40] bg-[#fcfcf9]"
+            />
+            <button
+              onClick={() => {
+                if (manualApiKey.trim()) {
+                  initializedRef.current = false;
+                  setInitStage('idle');
+                }
+              }}
+              className="w-full bg-[#5A5A40] text-white py-3 rounded-xl font-medium hover:bg-[#4a4a35] transition-colors"
+            >
+              Kết nối và Bắt đầu
+            </button>
+            <p className="text-xs text-[#8E9299]">
+              Bạn có thể lấy API Key miễn phí tại <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="underline">Google AI Studio</a>.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-[#f5f5f0] max-w-5xl mx-auto shadow-2xl overflow-hidden md:rounded-3xl md:h-[95vh] md:my-[2.5vh]">
