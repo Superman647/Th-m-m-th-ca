@@ -420,41 +420,10 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
           return;
         }
         
-        // 1. Analyze Tone (Optional - skip on failure)
-        setInitStage('analyzing');
-        let tone = 'truyền cảm';
-        try {
-          const toneResponse = await withRetry(() => ai.models.generateContent({
-            model: 'gemini-2.0-flash',
-            contents: `Đoạn thơ: "${poem}"\nTác giả: ${author}\nHãy chỉ ra giọng điệu và cảm xúc chủ đạo của đoạn thơ này trong 1-3 từ (ví dụ: hào hùng, bi tráng, tha thiết, buồn bã, vui tươi...). Chỉ trả về các từ chỉ giọng điệu, không giải thích thêm.`
-          }));
-          tone = toneResponse.text?.trim() || 'truyền cảm';
-        } catch (e) {
-          console.warn('Tone analysis failed, skipping:', e);
-        }
-        
-        setPoemTone(tone);
-        
-        // 2. Read Poem
-        setInitStage('reading');
-        setMessages([{
-          id: 'system-reading',
-          role: 'model',
-          text: `*Đã phân tích giọng điệu: **${tone}**. Đang đọc đoạn thơ...*`
-        }]);
-
-        setPlayingAudioId('system-reading');
-        
-        // Read the entire poem in a single API call to save quota
-        addAudioTask(
-          poem, 
-          () => setReadingPoemLine(-1),
-          () => setReadingPoemLine(null)
-        );
-
-        // Remove blocking wait to speed up chat initialization
-        // 3. Start Chat
+        // Skip automatic analysis to save quota
+        setPoemTone('truyền cảm');
         setInitStage('ready');
+
         const chat = ai.chats.create({
           model: 'gemini-2.0-flash',
           config: {
@@ -463,27 +432,12 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         });
         setChatSession(chat);
 
-        const initialPrompt = `Đoạn thơ: ${poem}\nTác giả: ${author}\nHãy bắt đầu BƯỚC 1.`;
-        const responseStream = await withRetry(() => chat.sendMessageStream({ message: initialPrompt }));
-        
-        const firstMessageId = Date.now().toString();
-        setMessages(prev => [
-          ...prev,
-          { id: firstMessageId, role: 'model', text: '' },
-        ]);
-        
-        let fullText = '';
-        let sentToTTSLength = 0;
-        
-        for await (const chunk of responseStream) {
-          const chunkText = chunk.text || '';
-          fullText += chunkText;
-          
-          const displayText = fullText.replace(/\[RHYTHM:.*?\]/g, '').replace(/\[HIGHLIGHT:.*?\]/g, '').replace(/\[CLEAR_MARKUP\]/g, '').trim();
-          setMessages((prev) => prev.map(m => m.id === firstMessageId ? { ...m, text: displayText } : m));
-          
-          parseMarkup(fullText);
-        }
+        // Don't send initial prompt automatically, wait for user or show a welcome message
+        setMessages([{
+          id: 'welcome',
+          role: 'model',
+          text: `Chào bạn! Tôi là Mentor Thơ Ca. Tôi đã sẵn sàng đồng hành cùng bạn khám phá vẻ đẹp của đoạn thơ này. \n\nBạn muốn bắt đầu từ đâu? Chúng ta có thể phân tích **hình ảnh**, **ngôn từ** hay **cảm xúc** của bài thơ?`
+        }]);
         
       } catch (error: any) {
         console.error('Initialization error:', error);
