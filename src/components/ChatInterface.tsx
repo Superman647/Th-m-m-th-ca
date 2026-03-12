@@ -153,7 +153,19 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   }, []);
 
   const getGenAIClient = () => {
-    return new GoogleGenAI({ apiKey: process.env.API_KEY || process.env.GEMINI_API_KEY });
+    // Priority: 
+    // 1. process.env.API_KEY (AI Studio internal)
+    // 2. process.env.GEMINI_API_KEY (Defined in vite.config.ts from env)
+    // 3. import.meta.env.VITE_GEMINI_API_KEY (Standard Vite env var)
+    const apiKey = process.env.API_KEY || 
+                   process.env.GEMINI_API_KEY || 
+                   (import.meta as any).env?.VITE_GEMINI_API_KEY;
+                   
+    if (!apiKey || apiKey === 'undefined' || apiKey === 'MY_GEMINI_API_KEY') {
+      console.error("API Key is missing or invalid. Please check your environment variables.");
+    }
+    
+    return new GoogleGenAI({ apiKey });
   };
 
   const handleConnectApiKey = async () => {
@@ -403,7 +415,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         // 1. Analyze Tone
         setInitStage('analyzing');
         const toneResponse = await withRetry(() => ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-1.5-flash-latest',
           contents: `Đoạn thơ: "${poem}"\nTác giả: ${author}\nHãy chỉ ra giọng điệu và cảm xúc chủ đạo của đoạn thơ này trong 1-3 từ (ví dụ: hào hùng, bi tráng, tha thiết, buồn bã, vui tươi...). Chỉ trả về các từ chỉ giọng điệu, không giải thích thêm.`
         }));
         
@@ -431,7 +443,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         // 3. Start Chat
         setInitStage('ready');
         const chat = ai.chats.create({
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-1.5-flash-latest',
           config: {
             systemInstruction: SYSTEM_PROMPT,
           },
@@ -463,13 +475,20 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       } catch (error: any) {
         console.error('Initialization error:', error);
         let errorMessage = 'Xin lỗi, đã có lỗi xảy ra khi khởi tạo. Vui lòng thử lại sau.';
-        if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('quota')) {
+        const errorStr = error?.message || String(error);
+        
+        if (error?.status === 429 || errorStr.includes('429') || errorStr.includes('quota')) {
           errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút.';
+        } else if (errorStr.includes('API_KEY_INVALID') || errorStr.includes('invalid')) {
+          errorMessage = 'API Key không hợp lệ. Vui lòng kiểm tra lại cấu hình trên Vercel.';
+        } else if (errorStr.includes('location') || errorStr.includes('supported')) {
+          errorMessage = 'Vùng lãnh thổ của bạn hiện chưa được Gemini hỗ trợ API này.';
         }
+        
         setMessages([{
           id: Date.now().toString(),
           role: 'model',
-          text: errorMessage,
+          text: `${errorMessage}\n\n*(Chi tiết lỗi: ${errorStr.substring(0, 100)}...)*`,
         }]);
       } finally {
         setIsLoading(false);
