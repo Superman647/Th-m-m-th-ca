@@ -119,7 +119,11 @@ interface PollinationsMessage {
   content: string;
 }
 
-const TEXT_API_BASE = (import.meta as any).env?.VITE_TEXT_API_BASE || 'https://text.pollinations.ai';
+const DEFAULT_TEXT_ENDPOINT = 'https://text.pollinations.ai/openai/v1/chat/completions';
+const TEXT_API_BASE = (import.meta as any).env?.VITE_TEXT_API_BASE as string | undefined;
+const TEXT_API_ENDPOINTS = TEXT_API_BASE
+  ? [`${TEXT_API_BASE.replace(/\/$/, '')}/openai/v1/chat/completions`]
+  : ['/api/chat', DEFAULT_TEXT_ENDPOINT];
 const TEXT_MODELS = ['openai-large', 'openai'];
 
 export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
@@ -170,37 +174,39 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const callPollinations = async (conversation: PollinationsMessage[]): Promise<string> => {
     let lastError: unknown;
 
-    for (const model of TEXT_MODELS) {
-      try {
-        const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), 25000);
+    for (const endpoint of TEXT_API_ENDPOINTS) {
+      for (const model of TEXT_MODELS) {
+        try {
+          const controller = new AbortController();
+          const timeout = window.setTimeout(() => controller.abort(), 25000);
 
-        const response = await fetch(`${TEXT_API_BASE}/openai/v1/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model,
-            messages: conversation,
-            temperature: 0.7,
-          }),
-          signal: controller.signal,
-        });
-        window.clearTimeout(timeout);
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model,
+              messages: conversation,
+              temperature: 0.7,
+            }),
+            signal: controller.signal,
+          });
+          window.clearTimeout(timeout);
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Text API failed (${response.status}, model=${model}): ${errorText}`);
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Text API failed (${response.status}, endpoint=${endpoint}, model=${model}): ${errorText}`);
+          }
+
+          const data = await response.json();
+          const text = data?.choices?.[0]?.message?.content?.trim();
+          if (!text) {
+            throw new Error(`Text API returned empty content (endpoint=${endpoint}, model=${model})`);
+          }
+
+          return text;
+        } catch (error) {
+          lastError = error;
         }
-
-        const data = await response.json();
-        const text = data?.choices?.[0]?.message?.content?.trim();
-        if (!text) {
-          throw new Error(`Text API returned empty content (model=${model})`);
-        }
-
-        return text;
-      } catch (error) {
-        lastError = error;
       }
     }
 

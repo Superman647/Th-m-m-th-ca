@@ -17,9 +17,17 @@
 2. Run the app:
    `npm run dev`
 
+## Deploy on Vercel
+
+1. Import repo vào Vercel.
+2. Build command: `npm run build`
+3. Output directory: `dist`
+4. Deploy.
+
+App sẽ ưu tiên gọi **`/api/chat`** (Vercel Serverless Function) để tránh lỗi mạng/CORS từ browser tới Pollinations.
+
 ## Deploy notes
 
 - Không cần cấu hình `GEMINI_API_KEY` nữa.
-- Mặc định text endpoint là `https://text.pollinations.ai/openai/v1/chat/completions`.
-- Có thể override endpoint bằng biến môi trường `VITE_TEXT_API_BASE` (ví dụ khi môi trường deploy chặn domain mặc định).
+- Nếu muốn bỏ qua Vercel function và gọi thẳng endpoint text, có thể set `VITE_TEXT_API_BASE` (ví dụ: `https://text.pollinations.ai`).
 - Voice AI dùng `window.speechSynthesis`, chất lượng giọng phụ thuộc vào hệ điều hành + trình duyệt của người dùng.
