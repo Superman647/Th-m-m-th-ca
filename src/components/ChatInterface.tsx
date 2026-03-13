@@ -56,7 +56,16 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 10
     } catch (error: any) {
       attempt++;
       const errorMessage = error?.message || '';
-      const isRetryable = error?.status === 429 || error?.status >= 500 || errorMessage.includes('429') || errorMessage.includes('500') || errorMessage.includes('quota') || errorMessage.includes('Internal');
+      const isRetryable =
+        error?.status === 429 ||
+        error?.status >= 500 ||
+        errorMessage.includes('429') ||
+        errorMessage.includes('500') ||
+        errorMessage.includes('quota') ||
+        errorMessage.includes('Internal') ||
+        errorMessage.includes('Failed to fetch') ||
+        errorMessage.includes('NetworkError') ||
+        errorMessage.includes('Load failed');
       if (!isRetryable || attempt >= maxRetries) {
         throw error;
       }
@@ -110,6 +119,13 @@ interface PollinationsMessage {
   content: string;
 }
 
+const DEFAULT_TEXT_ENDPOINT = 'https://text.pollinations.ai/openai/v1/chat/completions';
+const TEXT_API_BASE = (import.meta as any).env?.VITE_TEXT_API_BASE as string | undefined;
+const TEXT_API_ENDPOINTS = TEXT_API_BASE
+  ? [`${TEXT_API_BASE.replace(/\/$/, '')}/openai/v1/chat/completions`]
+  : ['/api/chat', DEFAULT_TEXT_ENDPOINT];
+const TEXT_MODELS = ['openai-large', 'openai'];
+
 export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -156,6 +172,46 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   }, []);
 
   const callPollinations = async (conversation: PollinationsMessage[]): Promise<string> => {
+    let lastError: unknown;
+
+    for (const endpoint of TEXT_API_ENDPOINTS) {
+      for (const model of TEXT_MODELS) {
+        try {
+          const controller = new AbortController();
+          const timeout = window.setTimeout(() => controller.abort(), 25000);
+
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model,
+              messages: conversation,
+              temperature: 0.7,
+            }),
+            signal: controller.signal,
+          });
+          window.clearTimeout(timeout);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Text API failed (${response.status}, endpoint=${endpoint}, model=${model}): ${errorText}`);
+          }
+
+          const data = await response.json();
+          const text = data?.choices?.[0]?.message?.content?.trim();
+          if (!text) {
+            throw new Error(`Text API returned empty content (endpoint=${endpoint}, model=${model})`);
+          }
+
+          return text;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error('Text API failed with unknown error');
+  };
     const response = await fetch('https://text.pollinations.ai/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -174,6 +230,20 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     const data = await response.json();
     return data?.choices?.[0]?.message?.content?.trim() || '';
   };
+
+  const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => ({
+    sendMessageStream: async function* ({ message }) {
+      historyRef.current.push({ role: 'user', content: message });
+      const fullText = await withRetry(() => callPollinations(historyRef.current));
+      historyRef.current.push({ role: 'assistant', content: fullText });
+
+      // giả lập stream để giữ nguyên UI hiện tại
+      const words = fullText.split(/(\s+)/).filter(Boolean);
+      for (const word of words) {
+        yield { text: word };
+      }
+    }
+  });
 
   const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => ({
     sendMessageStream: async function* ({ message }) {
@@ -399,6 +469,18 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         // 1. Analyze Tone
         setInitStage('analyzing');
         const tonePrompt = `Đoạn thơ: "${poem}"\nTác giả: ${author}\nHãy chỉ ra giọng điệu và cảm xúc chủ đạo của đoạn thơ này trong 1-3 từ (ví dụ: hào hùng, bi tráng, tha thiết, buồn bã, vui tươi...). Chỉ trả về các từ chỉ giọng điệu, không giải thích thêm.`;
+
+        let tone = 'truyền cảm';
+        try {
+          const toneResponse = await withRetry(() => callPollinations([
+            { role: 'system', content: 'Bạn là chuyên gia phân tích giọng điệu thơ. Trả lời cực ngắn gọn.' },
+            { role: 'user', content: tonePrompt }
+          ]));
+          tone = toneResponse.trim() || 'truyền cảm';
+        } catch (toneError) {
+          console.warn('Tone analysis failed, fallback to default tone:', toneError);
+        }
+
         const toneResponse = await withRetry(() => callPollinations([
           { role: 'system', content: 'Bạn là chuyên gia phân tích giọng điệu thơ. Trả lời cực ngắn gọn.' },
           { role: 'user', content: tonePrompt }
@@ -456,6 +538,8 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         let errorMessage = 'Xin lỗi, đã có lỗi xảy ra khi khởi tạo. Vui lòng thử lại sau.';
         if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('quota')) {
           errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút.';
+        } else if (error?.message?.includes('Failed to fetch') || error?.message?.includes('NetworkError')) {
+          errorMessage = 'Không thể kết nối tới máy chủ AI (có thể do chặn mạng/CORS ở môi trường deploy). Vui lòng kiểm tra mạng hoặc đổi endpoint TEXT_API.';
         }
         setMessages([{
           id: Date.now().toString(),
