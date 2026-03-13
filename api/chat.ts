@@ -7,7 +7,7 @@ export default async function handler(req: any, res: any) {
   const models = ['openai-large', 'openai'];
   const incoming = req.body || {};
   const messages = incoming.messages;
-  const temperature = incoming.temperature ?? 0.7;
+  const temperature = incoming.temperature ?? 0.5;
 
   if (!Array.isArray(messages) || messages.length === 0) {
     res.status(400).json({ error: 'messages is required' });
@@ -21,7 +21,7 @@ export default async function handler(req: any, res: any) {
   for (const model of modelQueue) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 25000);
+      const timeout = setTimeout(() => controller.abort('Text API timeout'), 45000);
 
       const response = await fetch('https://text.pollinations.ai/openai/v1/chat/completions', {
         method: 'POST',

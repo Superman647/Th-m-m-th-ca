@@ -7,7 +7,7 @@
 Ứng dụng đã được đổi sang:
 - **Text AI miễn phí** qua Pollinations (fallback model: `openai-large` -> `openai`) — không cần Gemini API key.
 - **Text AI miễn phí** qua Pollinations (`openai-large`) — không cần Gemini API key.
-- **Voice AI miễn phí** qua Web Speech API (ưu tiên giọng nữ tiếng Việt nếu trình duyệt hỗ trợ).
+- **Voice AI** qua ElevenLabs (voice ID mặc định: `jdlxsPOZOHdGEfcItXVu`), tự fallback sang Web Speech nếu TTS API lỗi.
 
 ## Run Locally
 
@@ -25,14 +25,13 @@
 3. Output directory: `dist`
 4. Deploy.
 
-App sẽ ưu tiên gọi **`/api/chat`** (Vercel Serverless Function) để tránh lỗi mạng/CORS từ browser tới Pollinations.
+App mặc định gọi trực tiếp Pollinations để tránh lỗi `/api/chat` 404 trên static host.
+
+Nếu deploy trên Vercel và muốn ưu tiên serverless route, set `VITE_USE_LOCAL_API=true`.
 
 ## Deploy notes
 
 - Không cần cấu hình `GEMINI_API_KEY` nữa.
-- Nếu muốn bỏ qua Vercel function và gọi thẳng endpoint text, có thể set `VITE_TEXT_API_BASE` (ví dụ: `https://text.pollinations.ai`).
-## Deploy notes
-
-- Không cần cấu hình `GEMINI_API_KEY` nữa.
-- Text AI gọi trực tiếp endpoint `https://text.pollinations.ai/openai/v1/chat/completions`.
-- Voice AI dùng `window.speechSynthesis`, chất lượng giọng phụ thuộc vào hệ điều hành + trình duyệt của người dùng.
+- Có thể set `VITE_TEXT_API_BASE` (ví dụ: `https://text.pollinations.ai`) để đổi text endpoint.
+- Cần set `ELEVENLABS_API_KEY` (Project Settings -> Environment Variables trên Vercel) để bật giọng ElevenLabs.
+- Nếu ElevenLabs lỗi/quá hạn mức, app sẽ fallback sang `window.speechSynthesis`.

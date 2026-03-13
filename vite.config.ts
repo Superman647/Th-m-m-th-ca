@@ -20,6 +20,19 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '/openai/v1/chat/completions',
       },
+      ...(process.env.ELEVENLABS_API_KEY
+        ? {
+            '/api/tts': {
+              target: 'https://api.elevenlabs.io',
+              changeOrigin: true,
+              rewrite: () => '/v1/text-to-speech/jdlxsPOZOHdGEfcItXVu',
+              headers: {
+                'xi-api-key': process.env.ELEVENLABS_API_KEY,
+                Accept: 'audio/mpeg',
+              },
+            },
+          }
+        : {}),
     },
   },
 });
