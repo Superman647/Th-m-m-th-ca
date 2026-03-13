@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Markdown from 'react-markdown';
 import { Send, Volume2, Loader2, ArrowLeft, User, Sparkles, BookOpen, X, Feather, Activity, Lightbulb } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { callPuterGemini, isPuterAvailable } from '../lib/puter';
 
 const SYSTEM_PROMPT = `Định vị: Bạn là "Mentor Thẩm mĩ Thơ ca", một chuyên gia Văn học và là người dẫn dắt đầy tính sư phạm. Nhiệm vụ của bạn là hướng dẫn học sinh cấp 3 phát hiện và giải mã tín hiệu thẩm mĩ trong thơ hiện đại dựa trên phương pháp tri giác và tư duy ngôn ngữ nghệ thuật.
 
@@ -129,6 +130,7 @@ const TEXT_API_ENDPOINTS = TEXT_API_BASE
     : [DEFAULT_TEXT_ENDPOINT, '/api/chat'];
 const TEXT_MODELS = ['openai-large', 'openai'];
 const ELEVENLABS_TTS_ENDPOINT = '/api/tts';
+const USE_PUTER_GEMINI = (import.meta as any).env?.VITE_USE_PUTER_GEMINI !== 'false';
 
 export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -176,8 +178,16 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     }
   }, []);
 
-  const callPollinations = async (conversation: PollinationsMessage[]): Promise<string> => {
+  const callTextAI = async (conversation: PollinationsMessage[]): Promise<string> => {
     let lastError: unknown;
+
+    if (USE_PUTER_GEMINI && isPuterAvailable()) {
+      try {
+        return await callPuterGemini(conversation);
+      } catch (error) {
+        lastError = error;
+      }
+    }
 
     for (const endpoint of TEXT_API_ENDPOINTS) {
       if (unavailableEndpointsRef.current.has(endpoint)) continue;
@@ -231,7 +241,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => ({
     sendMessageStream: async function* ({ message }) {
       historyRef.current.push({ role: 'user', content: message });
-      const fullText = await withRetry(() => callPollinations(historyRef.current));
+      const fullText = await withRetry(() => callTextAI(historyRef.current));
       historyRef.current.push({ role: 'assistant', content: fullText });
 
       // giả lập stream để giữ nguyên UI hiện tại
@@ -483,7 +493,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
 
         let tone = 'truyền cảm';
         try {
-          const toneResponse = await withRetry(() => callPollinations([
+          const toneResponse = await withRetry(() => callTextAI([
             { role: 'system', content: 'Bạn là chuyên gia phân tích giọng điệu thơ. Trả lời cực ngắn gọn.' },
             { role: 'user', content: tonePrompt }
           ]));
