@@ -5,6 +5,8 @@
 # Run and deploy your AI Poetry Mentor app
 
 Ứng dụng hiện hỗ trợ:
+- **Gemini qua Puter.js (duy nhất cho text AI)**, ưu tiên model nhanh + sâu: `gemini-3-flash-preview` -> `gemini-3.1-flash-lite-preview` -> `gemini-3.1-pro-preview`.
+- **Voice AI qua ElevenLabs** (voice ID mặc định: `jdlxsPOZOHdGEfcItXVu`) qua endpoint `/api/tts`.
 - **Gemini miễn phí qua Puter.js** (ưu tiên khi SDK khả dụng, dùng model nhanh: `gemini-3.1-flash-lite-preview` -> `gemini-3-flash-preview`).
 - **Text AI fallback qua Pollinations** (`openai-large` -> `openai`) khi Puter không khả dụng.
 - **Gemini miễn phí qua Puter.js** (ưu tiên khi SDK khả dụng).
@@ -30,6 +32,14 @@
 3. Output directory: `dist`
 4. Deploy.
 
+## Deploy notes
+
+- Bắt buộc nhúng Puter SDK ở `index.html`: `https://js.puter.com/v2/`.
+- Text AI phụ thuộc Puter Gemini, không còn dùng Pollinations.
+- Chat dùng streaming realtime để phản hồi xuất hiện sớm.
+- Cần set `ELEVENLABS_API_KEY` (Project Settings -> Environment Variables) để bật giọng ElevenLabs.
+- Có thể set `VITE_ELEVENLABS_TTS_BASE` nếu muốn trỏ frontend sang domain backend khác có route `/api/tts`.
+- `/api/chat` đã deprecated và không còn dùng.
 ## Deploy notes
 
 - Đã nhúng Puter SDK ở `index.html` qua `https://js.puter.com/v2/`.

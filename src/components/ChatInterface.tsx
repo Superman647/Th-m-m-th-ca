@@ -116,11 +116,15 @@ interface ChatSession {
   sendMessageStream: ({ message }: { message: string }) => AsyncGenerator<ChatChunk, void, unknown>;
 }
 
-interface PollinationsMessage {
+interface GeminiMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
+const ELEVENLABS_TTS_BASE = (import.meta as any).env?.VITE_ELEVENLABS_TTS_BASE as string | undefined;
+const ELEVENLABS_TTS_ENDPOINT = ELEVENLABS_TTS_BASE
+  ? `${ELEVENLABS_TTS_BASE.replace(/\/$/, '')}/api/tts`
+  : '/api/tts';
 const DEFAULT_TEXT_ENDPOINT = 'https://text.pollinations.ai/openai/v1/chat/completions';
 const TEXT_API_BASE = (import.meta as any).env?.VITE_TEXT_API_BASE as string | undefined;
 const SHOULD_USE_LOCAL_API = (import.meta as any).env?.VITE_USE_LOCAL_API === 'true';
@@ -154,6 +158,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const [rhythmLines, setRhythmLines] = useState<string[]>([]);
   
   const initializedRef = useRef(false);
+  const convoHistoryRef = useRef<GeminiMessage[]>([]);
   const convoHistoryRef = useRef<PollinationsMessage[]>([]);
   const unavailableEndpointsRef = useRef<Set<string>>(new Set());
 
@@ -173,6 +178,10 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     }
   }, [readingPoemLine]);
 
+
+  const callTextAI = async (conversation: GeminiMessage[]): Promise<string> => {
+    if (!isPuterAvailable()) {
+      throw new Error('Puter Gemini chưa sẵn sàng. Hãy kiểm tra script https://js.puter.com/v2/ hoặc mạng.');
   useEffect(() => () => {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -236,9 +245,25 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       }
     }
 
-    throw lastError instanceof Error ? lastError : new Error('Text API failed with unknown error');
+    return callPuterGemini(conversation);
   };
 
+  const createChatSession = (historyRef: React.MutableRefObject<GeminiMessage[]>): ChatSession => ({
+    sendMessageStream: async function* ({ message }) {
+      historyRef.current.push({ role: 'user', content: message });
+
+      let fullText = '';
+      const stream = await withRetry(() => Promise.resolve(streamPuterGemini(historyRef.current)));
+      for await (const part of stream) {
+        fullText += part;
+        yield { text: part };
+      }
+
+      if (!fullText.trim()) {
+        throw new Error('Gemini stream trả về rỗng.');
+      }
+
+      historyRef.current.push({ role: 'assistant', content: fullText });
   const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => ({
     sendMessageStream: async function* ({ message }) {
       historyRef.current.push({ role: 'user', content: message });
@@ -375,8 +400,12 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     });
   };
 
-  const playBrowserTTS = (text: string): Promise<void> => {
+  const playElevenLabsAudio = (source: string): Promise<void> => {
     return new Promise((resolve, reject) => {
+      const audio = new Audio(source);
+      audio.onended = () => resolve();
+      audio.onerror = () => reject(new Error('Không phát được audio từ ElevenLabs.'));
+      audio.play().catch(reject);
       if (!('speechSynthesis' in window)) {
         reject(new Error('SpeechSynthesis is not supported in this browser'));
         return;
@@ -408,9 +437,6 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
 
   const stopAllAudio = () => {
     audioTasks.current = [];
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
     isPlayingAudio.current = false;
   };
 
@@ -447,6 +473,8 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       task.base64Audio = `data:audio/mpeg;base64,${btoa(binary)}`;
       task.isReady = true;
     } catch (error) {
+      console.error('ElevenLabs TTS error:', error);
+      task.isFailed = true;
       console.warn('ElevenLabs TTS unavailable, fallback to browser voice:', error);
       task.base64Audio = task.text;
       task.isReady = true;
@@ -471,6 +499,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       isPlayingAudio.current = true;
       if (task.onStart) task.onStart();
       try {
+        await playElevenLabsAudio(task.base64Audio);
         if (task.base64Audio.startsWith('data:audio/')) {
           await new Promise<void>((resolve, reject) => {
             const audio = new Audio(task.base64Audio);
@@ -482,7 +511,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
           await playBrowserTTS(task.base64Audio);
         }
       } catch (e) {
-        console.error("Play error", e);
+        console.error('Play error', e);
       } finally {
         if (task.onEnd) task.onEnd();
         isPlayingAudio.current = false;
@@ -569,7 +598,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('quota')) {
           errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút.';
         } else if (error?.message?.includes('Failed to fetch') || error?.message?.includes('NetworkError')) {
-          errorMessage = 'Không thể kết nối tới máy chủ AI (có thể do chặn mạng/CORS ở môi trường deploy). Vui lòng kiểm tra mạng hoặc đổi endpoint TEXT_API.';
+          errorMessage = 'Không thể kết nối tới máy chủ AI (có thể do chặn mạng/CORS ở môi trường deploy). Vui lòng kiểm tra mạng hoặc script Puter.';
         }
         setMessages([{
           id: Date.now().toString(),

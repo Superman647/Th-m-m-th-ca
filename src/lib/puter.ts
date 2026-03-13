@@ -4,6 +4,12 @@ export interface ChatMessage {
 }
 
 const PUTER_MODELS = [
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite-preview',
+  'gemini-3.1-pro-preview',
+  'gemini-2.0-flash',
+];
+
   'gemini-3.1-flash-lite-preview',
   'gemini-3-flash-preview',
   'gemini-2.0-flash-lite',
@@ -46,6 +52,10 @@ export const isPuterAvailable = (): boolean => {
 export const callPuterGemini = async (messages: ChatMessage[]): Promise<string> => {
   const puter = (window as any).puter;
   if (!puter?.ai?.chat) {
+    throw new Error('Puter SDK is not available. Ensure https://js.puter.com/v2/ is loaded.');
+  }
+
+  const prompt = buildPrompt(messages);
     throw new Error('Puter SDK is not available');
   }
 
@@ -78,6 +88,7 @@ export const streamPuterGemini = async function* (
 ): AsyncGenerator<string, void, unknown> {
   const puter = (window as any).puter;
   if (!puter?.ai?.chat) {
+    throw new Error('Puter SDK is not available. Ensure https://js.puter.com/v2/ is loaded.');
     throw new Error('Puter SDK is not available');
   }
 
