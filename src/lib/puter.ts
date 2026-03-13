@@ -17,6 +17,7 @@ const buildPrompt = (messages: ChatMessage[]): string => {
     .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
     .join('\n\n');
 };
+const PUTER_MODELS = ['google/gemini-2.0-flash-lite', 'google/gemini-2.0-flash'];
 
 const extractText = (response: any): string => {
   if (!response) return '';
@@ -49,6 +50,9 @@ export const callPuterGemini = async (messages: ChatMessage[]): Promise<string> 
   }
 
   const prompt = buildPrompt(messages);
+  const prompt = messages
+    .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+    .join('\n\n');
 
   let lastError: unknown;
 
