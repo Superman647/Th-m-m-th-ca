@@ -3,6 +3,7 @@ import Markdown from 'react-markdown';
 import { Send, Volume2, Loader2, ArrowLeft, User, Sparkles, BookOpen, X, Feather, Activity, Lightbulb } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { callPuterGemini, isPuterAvailable, streamPuterGemini } from '../lib/puter';
+import { callPuterGemini, isPuterAvailable } from '../lib/puter';
 
 const SYSTEM_PROMPT = `Định vị: Bạn là "Mentor Thẩm mĩ Thơ ca", một chuyên gia Văn học và là người dẫn dắt đầy tính sư phạm. Nhiệm vụ của bạn là hướng dẫn học sinh cấp 3 phát hiện và giải mã tín hiệu thẩm mĩ trong thơ hiện đại dựa trên phương pháp tri giác và tư duy ngôn ngữ nghệ thuật.
 
@@ -124,6 +125,17 @@ const ELEVENLABS_TTS_BASE = (import.meta as any).env?.VITE_ELEVENLABS_TTS_BASE a
 const ELEVENLABS_TTS_ENDPOINT = ELEVENLABS_TTS_BASE
   ? `${ELEVENLABS_TTS_BASE.replace(/\/$/, '')}/api/tts`
   : '/api/tts';
+const DEFAULT_TEXT_ENDPOINT = 'https://text.pollinations.ai/openai/v1/chat/completions';
+const TEXT_API_BASE = (import.meta as any).env?.VITE_TEXT_API_BASE as string | undefined;
+const SHOULD_USE_LOCAL_API = (import.meta as any).env?.VITE_USE_LOCAL_API === 'true';
+const TEXT_API_ENDPOINTS = TEXT_API_BASE
+  ? [`${TEXT_API_BASE.replace(/\/$/, '')}/openai/v1/chat/completions`]
+  : SHOULD_USE_LOCAL_API
+    ? ['/api/chat', DEFAULT_TEXT_ENDPOINT]
+    : [DEFAULT_TEXT_ENDPOINT, '/api/chat'];
+const TEXT_MODELS = ['openai-large', 'openai'];
+const ELEVENLABS_TTS_ENDPOINT = '/api/tts';
+const USE_PUTER_GEMINI = (import.meta as any).env?.VITE_USE_PUTER_GEMINI !== 'false';
 
 export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -147,6 +159,8 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   
   const initializedRef = useRef(false);
   const convoHistoryRef = useRef<GeminiMessage[]>([]);
+  const convoHistoryRef = useRef<PollinationsMessage[]>([]);
+  const unavailableEndpointsRef = useRef<Set<string>>(new Set());
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -168,6 +182,67 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const callTextAI = async (conversation: GeminiMessage[]): Promise<string> => {
     if (!isPuterAvailable()) {
       throw new Error('Puter Gemini chưa sẵn sàng. Hãy kiểm tra script https://js.puter.com/v2/ hoặc mạng.');
+  useEffect(() => () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+  }, []);
+
+  const callTextAI = async (conversation: PollinationsMessage[]): Promise<string> => {
+    let lastError: unknown;
+
+    if (USE_PUTER_GEMINI && isPuterAvailable()) {
+      try {
+        return await callPuterGemini(conversation);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    for (const endpoint of TEXT_API_ENDPOINTS) {
+      if (unavailableEndpointsRef.current.has(endpoint)) continue;
+
+      for (const model of TEXT_MODELS) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort('Text API timeout'), 45000);
+
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model,
+              messages: conversation,
+              temperature: 0.5,
+            }),
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            if (response.status === 404 && endpoint.startsWith('/api/')) {
+              unavailableEndpointsRef.current.add(endpoint);
+            }
+            throw new Error(`Text API failed (${response.status}, endpoint=${endpoint}, model=${model}): ${errorText}`);
+          }
+
+          const data = await response.json();
+          const text = data?.choices?.[0]?.message?.content?.trim();
+          if (!text) {
+            throw new Error(`Text API returned empty content (endpoint=${endpoint}, model=${model})`);
+          }
+
+          return text;
+        } catch (error: any) {
+          if (error?.name === 'AbortError') {
+            lastError = new Error(`Text API timeout (endpoint=${endpoint}, model=${model})`);
+          } else {
+            lastError = error;
+          }
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
     }
 
     return callPuterGemini(conversation);
@@ -189,6 +264,31 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       }
 
       historyRef.current.push({ role: 'assistant', content: fullText });
+  const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => ({
+    sendMessageStream: async function* ({ message }) {
+      historyRef.current.push({ role: 'user', content: message });
+
+      if (USE_PUTER_GEMINI && isPuterAvailable()) {
+        try {
+          let puterText = '';
+          const stream = streamPuterGemini(historyRef.current);
+          for await (const part of stream) {
+            puterText += part;
+            yield { text: part };
+          }
+
+          if (puterText.trim()) {
+            historyRef.current.push({ role: 'assistant', content: puterText });
+            return;
+          }
+        } catch (error) {
+          console.warn('Puter stream failed, fallback to text API:', error);
+        }
+      }
+
+      const fullText = await withRetry(() => callTextAI(historyRef.current));
+      historyRef.current.push({ role: 'assistant', content: fullText });
+      yield { text: fullText };
     }
   });
 
@@ -306,6 +406,29 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       audio.onended = () => resolve();
       audio.onerror = () => reject(new Error('Không phát được audio từ ElevenLabs.'));
       audio.play().catch(reject);
+      if (!('speechSynthesis' in window)) {
+        reject(new Error('SpeechSynthesis is not supported in this browser'));
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'vi-VN';
+      utterance.rate = 1.08;
+      utterance.pitch = 1.15;
+
+      const allVoices = window.speechSynthesis.getVoices();
+      const femaleVoice = allVoices.find((voice) =>
+        voice.lang.toLowerCase().includes('vi') && /female|woman|nữ|mai|linh|vietnam/i.test(voice.name)
+      ) || allVoices.find((voice) => voice.lang.toLowerCase().includes('vi'));
+
+      if (femaleVoice) {
+        utterance.voice = femaleVoice;
+      }
+
+      utterance.onend = () => resolve();
+      utterance.onerror = (e) => reject(new Error(String(e.error || 'Speech synthesis failed')));
+      window.speechSynthesis.speak(utterance);
     });
   };
 
@@ -352,6 +475,9 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     } catch (error) {
       console.error('ElevenLabs TTS error:', error);
       task.isFailed = true;
+      console.warn('ElevenLabs TTS unavailable, fallback to browser voice:', error);
+      task.base64Audio = task.text;
+      task.isReady = true;
     } finally {
       task.isFetching = false;
       playNextAudio();
@@ -374,6 +500,16 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       if (task.onStart) task.onStart();
       try {
         await playElevenLabsAudio(task.base64Audio);
+        if (task.base64Audio.startsWith('data:audio/')) {
+          await new Promise<void>((resolve, reject) => {
+            const audio = new Audio(task.base64Audio);
+            audio.onended = () => resolve();
+            audio.onerror = () => reject(new Error('Failed to play ElevenLabs audio'));
+            audio.play().catch(reject);
+          });
+        } else {
+          await playBrowserTTS(task.base64Audio);
+        }
       } catch (e) {
         console.error('Play error', e);
       } finally {
