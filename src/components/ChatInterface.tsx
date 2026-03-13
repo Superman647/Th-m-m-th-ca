@@ -213,58 +213,6 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     throw lastError instanceof Error ? lastError : new Error('Text API failed with unknown error');
   };
 
-  const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => {
-    const sendMessageStream: ChatSession['sendMessageStream'] = ({ message }) => {
-      const stream = async function* () {
-        historyRef.current.push({ role: 'user', content: message });
-        const fullText = await withRetry(() => callPollinations(historyRef.current));
-        historyRef.current.push({ role: 'assistant', content: fullText });
-
-        // giả lập stream để giữ nguyên UI hiện tại
-        const words = fullText.split(/(\s+)/).filter(Boolean);
-        for (const word of words) {
-          yield { text: word };
-        }
-      };
-
-      return stream();
-    };
-
-    return { sendMessageStream };
-  };
-    const response = await fetch('https://text.pollinations.ai/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'openai-large',
-        messages: conversation,
-        temperature: 0.7,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Text API failed (${response.status}): ${errorText}`);
-    }
-
-    const data = await response.json();
-    return data?.choices?.[0]?.message?.content?.trim() || '';
-  };
-
-  const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => ({
-    sendMessageStream: async function* ({ message }) {
-      historyRef.current.push({ role: 'user', content: message });
-      const fullText = await withRetry(() => callPollinations(historyRef.current));
-      historyRef.current.push({ role: 'assistant', content: fullText });
-
-      // giả lập stream để giữ nguyên UI hiện tại
-      const words = fullText.split(/(\s+)/).filter(Boolean);
-      for (const word of words) {
-        yield { text: word };
-      }
-    }
-  });
-
   const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => ({
     sendMessageStream: async function* ({ message }) {
       historyRef.current.push({ role: 'user', content: message });
@@ -501,12 +449,6 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
           console.warn('Tone analysis failed, fallback to default tone:', toneError);
         }
 
-        const toneResponse = await withRetry(() => callPollinations([
-          { role: 'system', content: 'Bạn là chuyên gia phân tích giọng điệu thơ. Trả lời cực ngắn gọn.' },
-          { role: 'user', content: tonePrompt }
-        ]));
-        
-        const tone = toneResponse.trim() || 'truyền cảm';
         setPoemTone(tone);
         
         // 2. Read Poem
