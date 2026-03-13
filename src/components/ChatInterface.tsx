@@ -182,6 +182,10 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const callTextAI = async (conversation: GeminiMessage[]): Promise<string> => {
     if (!isPuterAvailable()) {
       throw new Error('Puter Gemini chưa sẵn sàng. Hãy kiểm tra script https://js.puter.com/v2/ hoặc mạng.');
+
+  const callTextAI = async (conversation: GeminiMessage[]): Promise<string> => {
+    if (!isPuterAvailable()) {
+      throw new Error('Puter Gemini chưa sẵn sàng. Hãy kiểm tra script https://js.puter.com/v2/ hoặc mạng.');
   useEffect(() => () => {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -253,6 +257,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       historyRef.current.push({ role: 'user', content: message });
 
       let fullText = '';
+      const stream = streamPuterGemini(historyRef.current);
       const stream = await withRetry(() => Promise.resolve(streamPuterGemini(historyRef.current)));
       for await (const part of stream) {
         fullText += part;
@@ -261,6 +266,9 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
 
       if (!fullText.trim()) {
         throw new Error('Gemini stream trả về rỗng.');
+      }
+
+      historyRef.current.push({ role: 'assistant', content: fullText });
       }
 
       historyRef.current.push({ role: 'assistant', content: fullText });

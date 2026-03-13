@@ -42,6 +42,14 @@
 - `/api/chat` đã deprecated và không còn dùng.
 ## Deploy notes
 
+- Bắt buộc nhúng Puter SDK ở `index.html`: `https://js.puter.com/v2/`.
+- Text AI phụ thuộc Puter Gemini, không còn dùng Pollinations.
+- Chat dùng streaming realtime để phản hồi xuất hiện sớm.
+- Cần set `ELEVENLABS_API_KEY` (Project Settings -> Environment Variables) để bật giọng ElevenLabs.
+- Có thể set `VITE_ELEVENLABS_TTS_BASE` nếu muốn trỏ frontend sang domain backend khác có route `/api/tts`.
+- `/api/chat` đã deprecated và không còn dùng.
+## Deploy notes
+
 - Đã nhúng Puter SDK ở `index.html` qua `https://js.puter.com/v2/`.
 - Chat Puter bật streaming realtime để phản hồi hiện ra sớm hơn (không đợi full text).
 - Có thể tắt Puter và dùng Pollinations bằng cách set `VITE_USE_PUTER_GEMINI=false`.
