@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Chat, Modality, ThinkingLevel } from '@google/genai';
 import Markdown from 'react-markdown';
-import { Send, Volume2, Loader2, ArrowLeft, User, Sparkles, BookOpen, X, Mic, Square, Key, Activity, Lightbulb, Feather, RefreshCw } from 'lucide-react';
+import { Send, Volume2, Loader2, ArrowLeft, User, Sparkles, BookOpen, X, Mic, Square, Key, Activity, Lightbulb, Feather } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const SYSTEM_PROMPT = `Định vị: Bạn là "Mentor Thẩm mĩ Thơ ca", một chuyên gia Văn học và là người dẫn dắt đầy tính sư phạm. Nhiệm vụ của bạn là hướng dẫn học sinh cấp 3 phát hiện và giải mã tín hiệu thẩm mĩ trong thơ hiện đại dựa trên phương pháp tri giác và tư duy ngôn ngữ nghệ thuật.
@@ -73,7 +73,6 @@ interface Message {
   role: 'user' | 'model';
   text: string;
   isAudioLoading?: boolean;
-  isError?: boolean;
 }
 
 interface AudioTask {
@@ -108,10 +107,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [showMobilePoem, setShowMobilePoem] = useState(false);
   
-  const [initStage, setInitStage] = useState<'idle' | 'analyzing' | 'reading' | 'ready' | 'error' | 'key_needed'>('idle');
-  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
-  const [manualApiKey, setManualApiKey] = useState('');
-  const [isManualKeyMode, setIsManualKeyMode] = useState(false);
+  const [initStage, setInitStage] = useState<'analyzing' | 'reading' | 'ready'>('analyzing');
   const [poemTone, setPoemTone] = useState('');
   const [readingPoemLine, setReadingPoemLine] = useState<number | null>(null);
   const activePoemLineRef = useRef<HTMLDivElement>(null);
@@ -157,20 +153,10 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   }, []);
 
   const getGenAIClient = () => {
-    // Priority: 
-    // 1. Manual Key from UI
-    // 2. process.env.API_KEY (AI Studio internal)
-    // 3. process.env.GEMINI_API_KEY (Defined in vite.config.ts from env)
-    // 4. import.meta.env.VITE_GEMINI_API_KEY (Standard Vite env var)
-    const apiKey = manualApiKey ||
-                   process.env.API_KEY || 
+    // Ưu tiên lấy từ VITE_ (chuẩn Vite) sau đó mới đến process.env (qua define của vite.config)
+    const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || 
                    process.env.GEMINI_API_KEY || 
-                   (import.meta as any).env?.VITE_GEMINI_API_KEY;
-                   
-    if (!apiKey || apiKey === 'undefined' || apiKey === 'MY_GEMINI_API_KEY') {
-      return null;
-    }
-    
+                   process.env.API_KEY;
     return new GoogleGenAI({ apiKey });
   };
 
@@ -415,74 +401,87 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     initializedRef.current = true;
 
     const initializeMentoring = async () => {
-      console.log("Initializing mentoring session (v4)...");
       try {
         const ai = getGenAIClient();
-        if (!ai || isQuotaExceeded) {
-          console.log("No API Key found or quota exceeded, showing key input.");
-          setInitStage('key_needed');
-          return;
-        }
         
-        console.log("API Key found, setting up chat session.");
-        // Skip automatic analysis to save quota
-        setPoemTone('truyền cảm');
+        // 1. Analyze Tone
+        setInitStage('analyzing');
+        const toneResponse = await withRetry(() => ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `Đoạn thơ: "${poem}"\nTác giả: ${author}\nHãy chỉ ra giọng điệu và cảm xúc chủ đạo của đoạn thơ này trong 1-3 từ (ví dụ: hào hùng, bi tráng, tha thiết, buồn bã, vui tươi...). Chỉ trả về các từ chỉ giọng điệu, không giải thích thêm.`
+        }));
         
-        let chat;
-        try {
-          chat = ai.chats.create({
-            model: 'gemini-3-flash-preview',
-            config: {
-              systemInstruction: SYSTEM_PROMPT,
-            },
-          });
-          console.log("Chat session created successfully.");
-        } catch (chatError: any) {
-          console.error("Error creating chat session:", chatError);
-          const errorStr = chatError?.message || String(chatError);
-          if (chatError?.status === 429 || errorStr.includes('429') || errorStr.includes('quota')) {
-            setIsQuotaExceeded(true);
-            setInitStage('key_needed');
-            return;
-          }
-          throw chatError;
-        }
+        const tone = toneResponse.text?.trim() || 'truyền cảm';
+        setPoemTone(tone);
         
-        setChatSession(chat);
-        setInitStage('ready');
-
-        // Don't send initial prompt automatically, wait for user or show a welcome message
+        // 2. Read Poem
+        setInitStage('reading');
         setMessages([{
-          id: 'welcome',
+          id: 'system-reading',
           role: 'model',
-          text: `Chào bạn! Tôi là Mentor Thơ Ca. Tôi đã sẵn sàng đồng hành cùng bạn khám phá vẻ đẹp của đoạn thơ này. \n\nBạn muốn bắt đầu từ đâu? Chúng ta có thể phân tích **hình ảnh**, **ngôn từ** hay **cảm xúc** của bài thơ?`
+          text: `*Đã phân tích giọng điệu: **${tone}**. Đang đọc đoạn thơ...*`
         }]);
+
+        setPlayingAudioId('system-reading');
+        
+        // Read the entire poem in a single API call to save quota
+        addAudioTask(
+          poem, 
+          () => setReadingPoemLine(-1),
+          () => setReadingPoemLine(null)
+        );
+
+        // Remove blocking wait to speed up chat initialization
+        // 3. Start Chat
+        setInitStage('ready');
+        const chat = ai.chats.create({
+          model: 'gemini-3-flash-preview',
+          config: {
+            systemInstruction: SYSTEM_PROMPT,
+          },
+        });
+        setChatSession(chat);
+
+        const initialPrompt = `Đoạn thơ: ${poem}\nTác giả: ${author}\nHãy bắt đầu BƯỚC 1.`;
+        const responseStream = await withRetry(() => chat.sendMessageStream({ message: initialPrompt }));
+        
+        const firstMessageId = Date.now().toString();
+        setMessages(prev => [
+          ...prev,
+          { id: firstMessageId, role: 'model', text: '' },
+        ]);
+        
+        let fullText = '';
+        let sentToTTSLength = 0;
+        
+        for await (const chunk of responseStream) {
+          const chunkText = chunk.text || '';
+          fullText += chunkText;
+          
+          const displayText = fullText.replace(/\[RHYTHM:.*?\]/g, '').replace(/\[HIGHLIGHT:.*?\]/g, '').replace(/\[CLEAR_MARKUP\]/g, '').trim();
+          setMessages((prev) => prev.map(m => m.id === firstMessageId ? { ...m, text: displayText } : m));
+          
+          parseMarkup(fullText);
+        }
         
       } catch (error: any) {
         console.error('Initialization error:', error);
-        const errorStr = error?.message || String(error);
-        
-        if (error?.status === 429 || errorStr.includes('429') || errorStr.includes('quota')) {
-          setIsQuotaExceeded(true);
-          setInitStage('key_needed');
-          return;
-        }
-        
         let errorMessage = 'Xin lỗi, đã có lỗi xảy ra khi khởi tạo. Vui lòng thử lại sau.';
+        if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('quota')) {
+          errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút.';
+        }
         setMessages([{
           id: Date.now().toString(),
           role: 'model',
-          text: `${errorMessage}\n\n*(Chi tiết lỗi: ${errorStr.substring(0, 100)}...)*`,
-          isError: true
+          text: errorMessage,
         }]);
-        setInitStage('error');
       } finally {
         setIsLoading(false);
       }
     };
 
     initializeMentoring();
-  }, [poem, author, manualApiKey]); // Re-run if manual key changes
+  }, [poem, author]);
 
   const sendChatMessage = async (userMessage: string) => {
     if (!chatSession) return;
@@ -523,15 +522,10 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       
     } catch (error: any) {
       console.error('Failed to send message:', error);
-      const errorStr = error?.message || String(error);
-      
-      if (error?.status === 429 || errorStr.includes('429') || errorStr.includes('quota')) {
-        setIsQuotaExceeded(true);
-        setInitStage('key_needed');
-        return;
-      }
-      
       let errorMessage = 'Xin lỗi, tôi không thể trả lời lúc này. Vui lòng thử lại.';
+      if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('quota')) {
+        errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút.';
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -569,50 +563,6 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     
     setMessages(prev => prev.map(m => m.id === messageId ? { ...m, isAudioLoading: false } : m));
   };
-
-  if (initStage === 'key_needed') {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-[#f5f5f0] p-6 text-center">
-        <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-[#e0e0d8]">
-          <div className="w-16 h-16 bg-[#5A5A40] rounded-full flex items-center justify-center mx-auto mb-6">
-            <Key className="text-white w-8 h-8" />
-          </div>
-          <h2 className="text-2xl font-serif font-bold text-[#1a1a1a] mb-4">
-            {isQuotaExceeded ? 'Hạn mức API đã hết' : 'Cần API Key để tiếp tục'}
-          </h2>
-          <p className="text-[#5A5A40] mb-6">
-            {isQuotaExceeded 
-              ? 'Hệ thống đang quá tải hoặc API Key hiện tại đã hết hạn mức sử dụng miễn phí của Google. Vui lòng nhập API Key cá nhân của bạn để tiếp tục không giới hạn.'
-              : 'Ứng dụng không tìm thấy API Key hợp lệ. Vui lòng nhập API Key của bạn để bắt đầu trải nghiệm.'}
-          </p>
-          <div className="space-y-4">
-            <input
-              type="password"
-              placeholder="Dán API Key của bạn vào đây..."
-              value={manualApiKey}
-              onChange={(e) => setManualApiKey(e.target.value)}
-              className="w-full px-4 py-3 rounded-xl border border-[#e0e0d8] focus:outline-none focus:ring-2 focus:ring-[#5A5A40] bg-[#fcfcf9]"
-            />
-            <button
-              onClick={() => {
-                if (manualApiKey.trim()) {
-                  setIsQuotaExceeded(false);
-                  initializedRef.current = false;
-                  setInitStage('idle');
-                }
-              }}
-              className="w-full bg-[#5A5A40] text-white py-3 rounded-xl font-medium hover:bg-[#4a4a35] transition-colors"
-            >
-              Kết nối và Bắt đầu
-            </button>
-            <p className="text-xs text-[#8E9299]">
-              Bạn có thể lấy API Key miễn phí tại <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="underline">Google AI Studio</a>.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col h-screen bg-[#f5f5f0] max-w-5xl mx-auto shadow-2xl overflow-hidden md:rounded-3xl md:h-[95vh] md:my-[2.5vh]">
@@ -868,24 +818,6 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
                     {msg.role === 'model' && (
                       <div className="markdown-body text-[15px] leading-relaxed">
                         <Markdown>{msg.text}</Markdown>
-                        {msg.isError && (
-                          <div className="flex flex-wrap gap-2 mt-4">
-                            <button 
-                              onClick={() => setInitStage('key_needed')}
-                              className="flex items-center gap-2 px-4 py-2 bg-[#5A5A40] text-white rounded-xl hover:bg-[#4a4a35] transition-colors text-sm"
-                            >
-                              <Key size={14} />
-                              Thử dùng API Key khác
-                            </button>
-                            <button 
-                              onClick={() => window.location.reload()}
-                              className="flex items-center gap-2 px-4 py-2 bg-white border border-[#e0e0d8] text-[#5A5A40] rounded-xl hover:bg-[#f5f5f0] transition-colors text-sm"
-                            >
-                              <RefreshCw size={14} />
-                              Tải lại trang
-                            </button>
-                          </div>
-                        )}
                       </div>
                     )}
                     {msg.role === 'user' && (
