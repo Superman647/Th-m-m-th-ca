@@ -3,6 +3,20 @@ export interface ChatMessage {
   content: string;
 }
 
+const PUTER_MODELS = [
+  'gemini-3.1-flash-lite-preview',
+  'gemini-3-flash-preview',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
+];
+
+
+
+const buildPrompt = (messages: ChatMessage[]): string => {
+  return messages
+    .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+    .join('\n\n');
+};
 const PUTER_MODELS = ['google/gemini-2.0-flash-lite', 'google/gemini-2.0-flash'];
 
 const extractText = (response: any): string => {
@@ -35,6 +49,7 @@ export const callPuterGemini = async (messages: ChatMessage[]): Promise<string> 
     throw new Error('Puter SDK is not available');
   }
 
+  const prompt = buildPrompt(messages);
   const prompt = messages
     .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
     .join('\n\n');
@@ -55,4 +70,42 @@ export const callPuterGemini = async (messages: ChatMessage[]): Promise<string> 
   }
 
   throw lastError instanceof Error ? lastError : new Error('Puter chat failed');
+};
+
+
+export const streamPuterGemini = async function* (
+  messages: ChatMessage[]
+): AsyncGenerator<string, void, unknown> {
+  const puter = (window as any).puter;
+  if (!puter?.ai?.chat) {
+    throw new Error('Puter SDK is not available');
+  }
+
+  const prompt = buildPrompt(messages);
+  let lastError: unknown;
+
+  for (const model of PUTER_MODELS) {
+    try {
+      const response = await puter.ai.chat(prompt, { model, stream: true });
+      let emitted = false;
+
+      for await (const part of response) {
+        const text = extractText(part);
+        if (text) {
+          emitted = true;
+          yield text;
+        }
+      }
+
+      if (!emitted) {
+        throw new Error(`Puter stream returned empty content (model=${model})`);
+      }
+
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Puter stream chat failed');
 };

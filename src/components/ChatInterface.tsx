@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Markdown from 'react-markdown';
 import { Send, Volume2, Loader2, ArrowLeft, User, Sparkles, BookOpen, X, Feather, Activity, Lightbulb } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { callPuterGemini, isPuterAvailable, streamPuterGemini } from '../lib/puter';
 import { callPuterGemini, isPuterAvailable } from '../lib/puter';
 
 const SYSTEM_PROMPT = `Định vị: Bạn là "Mentor Thẩm mĩ Thơ ca", một chuyên gia Văn học và là người dẫn dắt đầy tính sư phạm. Nhiệm vụ của bạn là hướng dẫn học sinh cấp 3 phát hiện và giải mã tín hiệu thẩm mĩ trong thơ hiện đại dựa trên phương pháp tri giác và tư duy ngôn ngữ nghệ thuật.
@@ -49,7 +50,7 @@ BƯỚC 4: GIẢI MÃ TÍN HIỆU (Decoding)
 BƯỚC 5: TỔNG KẾT (Summary)
 - Tổng hợp lại thành chỉnh thể nghệ thuật. Bắt buộc dùng thẻ [SUMMARY_MODE] và định dạng JSON như mẫu cũ.`;
 
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 1000): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 400): Promise<T> {
   let attempt = 0;
   while (attempt < maxRetries) {
     try {
@@ -241,14 +242,28 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => ({
     sendMessageStream: async function* ({ message }) {
       historyRef.current.push({ role: 'user', content: message });
+
+      if (USE_PUTER_GEMINI && isPuterAvailable()) {
+        try {
+          let puterText = '';
+          const stream = streamPuterGemini(historyRef.current);
+          for await (const part of stream) {
+            puterText += part;
+            yield { text: part };
+          }
+
+          if (puterText.trim()) {
+            historyRef.current.push({ role: 'assistant', content: puterText });
+            return;
+          }
+        } catch (error) {
+          console.warn('Puter stream failed, fallback to text API:', error);
+        }
+      }
+
       const fullText = await withRetry(() => callTextAI(historyRef.current));
       historyRef.current.push({ role: 'assistant', content: fullText });
-
-      // giả lập stream để giữ nguyên UI hiện tại
-      const words = fullText.split(/(\s+)/).filter(Boolean);
-      for (const word of words) {
-        yield { text: word };
-      }
+      yield { text: fullText };
     }
   });
 
@@ -370,7 +385,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'vi-VN';
-      utterance.rate = 0.95;
+      utterance.rate = 1.08;
       utterance.pitch = 1.15;
 
       const allVoices = window.speechSynthesis.getVoices();
