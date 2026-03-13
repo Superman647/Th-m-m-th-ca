@@ -212,6 +212,26 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
 
     throw lastError instanceof Error ? lastError : new Error('Text API failed with unknown error');
   };
+
+  const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => {
+    const sendMessageStream: ChatSession['sendMessageStream'] = ({ message }) => {
+      const stream = async function* () {
+        historyRef.current.push({ role: 'user', content: message });
+        const fullText = await withRetry(() => callPollinations(historyRef.current));
+        historyRef.current.push({ role: 'assistant', content: fullText });
+
+        // giả lập stream để giữ nguyên UI hiện tại
+        const words = fullText.split(/(\s+)/).filter(Boolean);
+        for (const word of words) {
+          yield { text: word };
+        }
+      };
+
+      return stream();
+    };
+
+    return { sendMessageStream };
+  };
     const response = await fetch('https://text.pollinations.ai/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
