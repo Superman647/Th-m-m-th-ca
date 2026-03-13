@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GoogleGenAI, Chat, Modality, ThinkingLevel } from '@google/genai';
 import Markdown from 'react-markdown';
-import { Send, Volume2, Loader2, ArrowLeft, User, Sparkles, BookOpen, X, Mic, Square, Key, Activity, Lightbulb, Feather } from 'lucide-react';
+import { Send, Volume2, Loader2, ArrowLeft, User, Sparkles, BookOpen, X, Feather, Activity, Lightbulb } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 const SYSTEM_PROMPT = `Định vị: Bạn là "Mentor Thẩm mĩ Thơ ca", một chuyên gia Văn học và là người dẫn dắt đầy tính sư phạm. Nhiệm vụ của bạn là hướng dẫn học sinh cấp 3 phát hiện và giải mã tín hiệu thẩm mĩ trong thơ hiện đại dựa trên phương pháp tri giác và tư duy ngôn ngữ nghệ thuật.
@@ -57,7 +56,16 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 10
     } catch (error: any) {
       attempt++;
       const errorMessage = error?.message || '';
-      const isRetryable = error?.status === 429 || error?.status >= 500 || errorMessage.includes('429') || errorMessage.includes('500') || errorMessage.includes('quota') || errorMessage.includes('Internal');
+      const isRetryable =
+        error?.status === 429 ||
+        error?.status >= 500 ||
+        errorMessage.includes('429') ||
+        errorMessage.includes('500') ||
+        errorMessage.includes('quota') ||
+        errorMessage.includes('Internal') ||
+        errorMessage.includes('Failed to fetch') ||
+        errorMessage.includes('NetworkError') ||
+        errorMessage.includes('Load failed');
       if (!isRetryable || attempt >= maxRetries) {
         throw error;
       }
@@ -98,11 +106,31 @@ interface ChatInterfaceProps {
   onBack: () => void;
 }
 
+interface ChatChunk {
+  text: string;
+}
+
+interface ChatSession {
+  sendMessageStream: ({ message }: { message: string }) => AsyncGenerator<ChatChunk, void, unknown>;
+}
+
+interface PollinationsMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+const DEFAULT_TEXT_ENDPOINT = 'https://text.pollinations.ai/openai/v1/chat/completions';
+const TEXT_API_BASE = (import.meta as any).env?.VITE_TEXT_API_BASE as string | undefined;
+const TEXT_API_ENDPOINTS = TEXT_API_BASE
+  ? [`${TEXT_API_BASE.replace(/\/$/, '')}/openai/v1/chat/completions`]
+  : ['/api/chat', DEFAULT_TEXT_ENDPOINT];
+const TEXT_MODELS = ['openai-large', 'openai'];
+
 export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [chatSession, setChatSession] = useState<Chat | null>(null);
+  const [chatSession, setChatSession] = useState<ChatSession | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [showMobilePoem, setShowMobilePoem] = useState(false);
@@ -118,9 +146,8 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const [summaryData, setSummaryData] = useState<SummaryData | null>(null);
   const [rhythmLines, setRhythmLines] = useState<string[]>([]);
   
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const initializedRef = useRef(false);
+  const convoHistoryRef = useRef<PollinationsMessage[]>([]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -138,38 +165,72 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     }
   }, [readingPoemLine]);
 
-  // Cleanup audio on unmount
-  useEffect(() => {
-    return () => {
-      if (audioSourceRef.current) {
-        try { audioSourceRef.current.stop(); } catch(e) {}
-        audioSourceRef.current = null;
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-    };
+  useEffect(() => () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
   }, []);
 
-  const getGenAIClient = () => {
-    // Ưu tiên lấy từ VITE_ (chuẩn Vite) sau đó mới đến process.env (qua define của vite.config)
-    const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || 
-                   process.env.GEMINI_API_KEY || 
-                   process.env.API_KEY;
-    return new GoogleGenAI({ apiKey });
+  const callPollinations = async (conversation: PollinationsMessage[]): Promise<string> => {
+    let lastError: unknown;
+
+    for (const endpoint of TEXT_API_ENDPOINTS) {
+      for (const model of TEXT_MODELS) {
+        try {
+          const controller = new AbortController();
+          const timeout = window.setTimeout(() => controller.abort(), 25000);
+
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model,
+              messages: conversation,
+              temperature: 0.7,
+            }),
+            signal: controller.signal,
+          });
+          window.clearTimeout(timeout);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Text API failed (${response.status}, endpoint=${endpoint}, model=${model}): ${errorText}`);
+          }
+
+          const data = await response.json();
+          const text = data?.choices?.[0]?.message?.content?.trim();
+          if (!text) {
+            throw new Error(`Text API returned empty content (endpoint=${endpoint}, model=${model})`);
+          }
+
+          return text;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error('Text API failed with unknown error');
   };
 
-  const handleConnectApiKey = async () => {
-    try {
-      if ((window as any).aistudio && (window as any).aistudio.openSelectKey) {
-        await (window as any).aistudio.openSelectKey();
-      } else {
-        alert('Tính năng này chỉ hoạt động trong môi trường AI Studio.');
-      }
-    } catch (e) {
-      console.error(e);
-    }
+  const createChatSession = (historyRef: React.MutableRefObject<PollinationsMessage[]>): ChatSession => {
+    const sendMessageStream: ChatSession['sendMessageStream'] = ({ message }) => {
+      const stream = async function* () {
+        historyRef.current.push({ role: 'user', content: message });
+        const fullText = await withRetry(() => callPollinations(historyRef.current));
+        historyRef.current.push({ role: 'assistant', content: fullText });
+
+        // giả lập stream để giữ nguyên UI hiện tại
+        const words = fullText.split(/(\s+)/).filter(Boolean);
+        for (const word of words) {
+          yield { text: word };
+        }
+      };
+
+      return stream();
+    };
+
+    return { sendMessageStream };
   };
 
   const parseMarkup = (text: string) => {
@@ -280,45 +341,31 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     });
   };
 
-  const playBase64Pcm = async (base64Data: string): Promise<void> => {
-    if (audioSourceRef.current) {
-      try { audioSourceRef.current.stop(); } catch(e) {}
-      audioSourceRef.current = null;
-    }
-    if (audioContextRef.current) {
-      await audioContextRef.current.close();
-    }
+  const playBrowserTTS = (text: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (!('speechSynthesis' in window)) {
+        reject(new Error('SpeechSynthesis is not supported in this browser'));
+        return;
+      }
 
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    audioContextRef.current = audioContext;
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'vi-VN';
+      utterance.rate = 0.95;
+      utterance.pitch = 1.15;
 
-    const binaryString = window.atob(base64Data);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
+      const allVoices = window.speechSynthesis.getVoices();
+      const femaleVoice = allVoices.find((voice) =>
+        voice.lang.toLowerCase().includes('vi') && /female|woman|nữ|mai|linh|vietnam/i.test(voice.name)
+      ) || allVoices.find((voice) => voice.lang.toLowerCase().includes('vi'));
 
-    const int16Array = new Int16Array(bytes.buffer);
-    const float32Array = new Float32Array(int16Array.length);
-    for (let i = 0; i < int16Array.length; i++) {
-      float32Array[i] = int16Array[i] / 32768.0;
-    }
+      if (femaleVoice) {
+        utterance.voice = femaleVoice;
+      }
 
-    const audioBuffer = audioContext.createBuffer(1, float32Array.length, 24000);
-    audioBuffer.getChannelData(0).set(float32Array);
-
-    const source = audioContext.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(audioContext.destination);
-    audioSourceRef.current = source;
-
-    return new Promise((resolve) => {
-      source.onended = () => {
-        audioSourceRef.current = null;
-        resolve();
-      };
-      source.start();
+      utterance.onend = () => resolve();
+      utterance.onerror = (e) => reject(e.error);
+      window.speechSynthesis.speak(utterance);
     });
   };
 
@@ -327,9 +374,8 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
 
   const stopAllAudio = () => {
     audioTasks.current = [];
-    if (audioSourceRef.current) {
-      try { audioSourceRef.current.stop(); } catch(e) {}
-      audioSourceRef.current = null;
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
     }
     isPlayingAudio.current = false;
   };
@@ -346,17 +392,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     
     task.isFetching = true;
     try {
-      const ai = getGenAIClient();
-      const response = await withRetry(() => ai.models.generateContent({
-        model: 'gemini-2.5-flash-preview-tts',
-        contents: [{ parts: [{ text: task.text }] }],
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
-        },
-      }));
-
-      task.base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      task.base64Audio = task.text;
       task.isReady = true;
     } catch (error) {
       console.error('TTS Fetch Error:', error);
@@ -382,7 +418,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       isPlayingAudio.current = true;
       if (task.onStart) task.onStart();
       try {
-        await playBase64Pcm(task.base64Audio);
+        await playBrowserTTS(task.base64Audio);
       } catch (e) {
         console.error("Play error", e);
       } finally {
@@ -402,16 +438,23 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
 
     const initializeMentoring = async () => {
       try {
-        const ai = getGenAIClient();
+        convoHistoryRef.current = [{ role: 'system', content: SYSTEM_PROMPT }];
         
         // 1. Analyze Tone
         setInitStage('analyzing');
-        const toneResponse = await withRetry(() => ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: `Đoạn thơ: "${poem}"\nTác giả: ${author}\nHãy chỉ ra giọng điệu và cảm xúc chủ đạo của đoạn thơ này trong 1-3 từ (ví dụ: hào hùng, bi tráng, tha thiết, buồn bã, vui tươi...). Chỉ trả về các từ chỉ giọng điệu, không giải thích thêm.`
-        }));
-        
-        const tone = toneResponse.text?.trim() || 'truyền cảm';
+        const tonePrompt = `Đoạn thơ: "${poem}"\nTác giả: ${author}\nHãy chỉ ra giọng điệu và cảm xúc chủ đạo của đoạn thơ này trong 1-3 từ (ví dụ: hào hùng, bi tráng, tha thiết, buồn bã, vui tươi...). Chỉ trả về các từ chỉ giọng điệu, không giải thích thêm.`;
+
+        let tone = 'truyền cảm';
+        try {
+          const toneResponse = await withRetry(() => callPollinations([
+            { role: 'system', content: 'Bạn là chuyên gia phân tích giọng điệu thơ. Trả lời cực ngắn gọn.' },
+            { role: 'user', content: tonePrompt }
+          ]));
+          tone = toneResponse.trim() || 'truyền cảm';
+        } catch (toneError) {
+          console.warn('Tone analysis failed, fallback to default tone:', toneError);
+        }
+
         setPoemTone(tone);
         
         // 2. Read Poem
@@ -434,16 +477,11 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         // Remove blocking wait to speed up chat initialization
         // 3. Start Chat
         setInitStage('ready');
-        const chat = ai.chats.create({
-          model: 'gemini-3-flash-preview',
-          config: {
-            systemInstruction: SYSTEM_PROMPT,
-          },
-        });
+        const chat = createChatSession(convoHistoryRef);
         setChatSession(chat);
 
         const initialPrompt = `Đoạn thơ: ${poem}\nTác giả: ${author}\nHãy bắt đầu BƯỚC 1.`;
-        const responseStream = await withRetry(() => chat.sendMessageStream({ message: initialPrompt }));
+        const responseStream = chat.sendMessageStream({ message: initialPrompt });
         
         const firstMessageId = Date.now().toString();
         setMessages(prev => [
@@ -452,7 +490,6 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         ]);
         
         let fullText = '';
-        let sentToTTSLength = 0;
         
         for await (const chunk of responseStream) {
           const chunkText = chunk.text || '';
@@ -469,6 +506,8 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
         let errorMessage = 'Xin lỗi, đã có lỗi xảy ra khi khởi tạo. Vui lòng thử lại sau.';
         if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('quota')) {
           errorMessage = 'Hệ thống đang quá tải hoặc hết hạn mức API. Vui lòng thử lại sau ít phút.';
+        } else if (error?.message?.includes('Failed to fetch') || error?.message?.includes('NetworkError')) {
+          errorMessage = 'Không thể kết nối tới máy chủ AI (có thể do chặn mạng/CORS ở môi trường deploy). Vui lòng kiểm tra mạng hoặc đổi endpoint TEXT_API.';
         }
         setMessages([{
           id: Date.now().toString(),
@@ -496,7 +535,7 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     setIsLoading(true);
 
     try {
-      const responseStream = await withRetry(() => chatSession.sendMessageStream({ message: userMessage }));
+      const responseStream = chatSession.sendMessageStream({ message: userMessage });
       const modelMessageId = (Date.now() + 1).toString();
       
       setMessages((prev) => [
@@ -507,7 +546,6 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
       setIsLoading(false);
       
       let fullText = '';
-      let sentToTTSLength = 0;
       
       for await (const chunk of responseStream) {
         const chunkText = chunk.text || '';
