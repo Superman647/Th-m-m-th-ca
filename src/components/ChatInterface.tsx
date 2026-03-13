@@ -186,6 +186,10 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
   const callTextAI = async (conversation: GeminiMessage[]): Promise<string> => {
     if (!isPuterAvailable()) {
       throw new Error('Puter Gemini chưa sẵn sàng. Hãy kiểm tra script https://js.puter.com/v2/ hoặc mạng.');
+
+  const callTextAI = async (conversation: GeminiMessage[]): Promise<string> => {
+    if (!isPuterAvailable()) {
+      throw new Error('Puter Gemini chưa sẵn sàng. Hãy kiểm tra script https://js.puter.com/v2/ hoặc mạng.');
   useEffect(() => () => {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -252,6 +256,30 @@ export function ChatInterface({ poem, author, onBack }: ChatInterfaceProps) {
     return callPuterGemini(conversation);
   };
 
+  const createChatSession = (historyRef: React.MutableRefObject<GeminiMessage[]>): ChatSession => {
+    const sendMessageStream: ChatSession['sendMessageStream'] = ({ message }) => {
+      const stream = async function* () {
+        historyRef.current.push({ role: 'user', content: message });
+
+        let fullText = '';
+        const puterStream = streamPuterGemini(historyRef.current);
+        for await (const part of puterStream) {
+          fullText += part;
+          yield { text: part };
+        }
+
+        if (!fullText.trim()) {
+          throw new Error('Gemini stream trả về rỗng.');
+        }
+
+        historyRef.current.push({ role: 'assistant', content: fullText });
+      };
+
+      return stream();
+    };
+
+    return { sendMessageStream };
+  };
   const createChatSession = (historyRef: React.MutableRefObject<GeminiMessage[]>): ChatSession => ({
     sendMessageStream: async function* ({ message }) {
       historyRef.current.push({ role: 'user', content: message });
