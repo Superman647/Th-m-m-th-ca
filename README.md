@@ -6,6 +6,7 @@
 
 Ứng dụng đã được đổi sang:
 - **Text AI miễn phí** qua Pollinations (fallback model: `openai-large` -> `openai`) — không cần Gemini API key.
+- **Text AI miễn phí** qua Pollinations (`openai-large`) — không cần Gemini API key.
 - **Voice AI miễn phí** qua Web Speech API (ưu tiên giọng nữ tiếng Việt nếu trình duyệt hỗ trợ).
 
 ## Run Locally
@@ -30,4 +31,8 @@ App sẽ ưu tiên gọi **`/api/chat`** (Vercel Serverless Function) để trá
 
 - Không cần cấu hình `GEMINI_API_KEY` nữa.
 - Nếu muốn bỏ qua Vercel function và gọi thẳng endpoint text, có thể set `VITE_TEXT_API_BASE` (ví dụ: `https://text.pollinations.ai`).
+## Deploy notes
+
+- Không cần cấu hình `GEMINI_API_KEY` nữa.
+- Text AI gọi trực tiếp endpoint `https://text.pollinations.ai/openai/v1/chat/completions`.
 - Voice AI dùng `window.speechSynthesis`, chất lượng giọng phụ thuộc vào hệ điều hành + trình duyệt của người dùng.
