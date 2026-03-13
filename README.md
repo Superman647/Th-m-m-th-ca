@@ -4,10 +4,9 @@
 
 # Run and deploy your AI Poetry Mentor app
 
-Ứng dụng đã được đổi sang:
-- **Text AI miễn phí** qua Pollinations (fallback model: `openai-large` -> `openai`) — không cần Gemini API key.
-- **Text AI miễn phí** qua Pollinations (`openai-large`) — không cần Gemini API key.
-- **Voice AI miễn phí** qua Web Speech API (ưu tiên giọng nữ tiếng Việt nếu trình duyệt hỗ trợ).
+Ứng dụng hiện hỗ trợ:
+- **Gemini qua Puter.js (duy nhất cho text AI)**, ưu tiên model nhanh + sâu: `gemini-3-flash-preview` -> `gemini-3.1-flash-lite-preview` -> `gemini-3.1-pro-preview`.
+- **Voice AI qua ElevenLabs** (voice ID mặc định: `jdlxsPOZOHdGEfcItXVu`) qua endpoint `/api/tts`.
 
 ## Run Locally
 
@@ -25,14 +24,11 @@
 3. Output directory: `dist`
 4. Deploy.
 
-App sẽ ưu tiên gọi **`/api/chat`** (Vercel Serverless Function) để tránh lỗi mạng/CORS từ browser tới Pollinations.
-
 ## Deploy notes
 
-- Không cần cấu hình `GEMINI_API_KEY` nữa.
-- Nếu muốn bỏ qua Vercel function và gọi thẳng endpoint text, có thể set `VITE_TEXT_API_BASE` (ví dụ: `https://text.pollinations.ai`).
-## Deploy notes
-
-- Không cần cấu hình `GEMINI_API_KEY` nữa.
-- Text AI gọi trực tiếp endpoint `https://text.pollinations.ai/openai/v1/chat/completions`.
-- Voice AI dùng `window.speechSynthesis`, chất lượng giọng phụ thuộc vào hệ điều hành + trình duyệt của người dùng.
+- Bắt buộc nhúng Puter SDK ở `index.html`: `https://js.puter.com/v2/`.
+- Text AI phụ thuộc Puter Gemini, không còn dùng Pollinations.
+- Chat dùng streaming realtime để phản hồi xuất hiện sớm.
+- Cần set `ELEVENLABS_API_KEY` (Project Settings -> Environment Variables) để bật giọng ElevenLabs.
+- Có thể set `VITE_ELEVENLABS_TTS_BASE` nếu muốn trỏ frontend sang domain backend khác có route `/api/tts`.
+- `/api/chat` đã deprecated và không còn dùng.
